@@ -1,212 +1,219 @@
-// BareMinimum v2 - Multi-profile local expense tracker
-import React, { useEffect, useState } from "react";
+// BareMinimum v3 - Local-only advanced tracker
+import React, { useEffect, useState, useRef } from "react";
 
-const QUICK_COMMERCE_KEYWORDS = [
-  "blinkit","zepto","zepto.co","grocery","quick","groceries","insta","blink","dunzo"
+const SUGGESTED_TAGS = [
+  {key:"Groceries", emoji:"🥦"}, {key:"Canteen", emoji:"🍱"}, {key:"Travel", emoji:"🚗"},
+  {key:"Bill", emoji:"💡"}, {key:"Rent", emoji:"🏠"}, {key:"Investment", emoji:"📈"},
+  {key:"Gym", emoji:"🏋️"}, {key:"Shopping", emoji:"🛍️"}, {key:"Misc", emoji:"🔖"}
 ];
 
-const formatDateTime = (iso) => {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString();
-  } catch(e) { return iso }
-}
+const QUICK_COMMERCE_KEYWORDS = ['blinkit','zepto','dunzo','blink','groceries','quick'];
 
-const startOfDayISO = (date) => {
-  const d = new Date(date);
-  d.setHours(0,0,0,0);
-  return d.toISOString();
-}
+const currency = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 });
 
-const storageKeyForProfile = (profile) => `baremin_profile_${profile}`;
+const storageProfilesKey = "baremin_profiles_v3";
+function storageKey(profile){ return `baremin_v3_${profile}`; }
 
-function uid(){ return Math.random().toString(36).slice(2,9) }
+function uid(){ return Math.random().toString(36).slice(2,9); }
+
+function formatDateOnly(iso){ const d = new Date(iso); return d.toLocaleDateString(); }
+function formatDateTime(iso){ const d = new Date(iso); return d.toLocaleString(); }
 
 export default function App(){
-  const [profiles, setProfiles] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("baremin_profiles") || "[]");
-    } catch(e){ return []; }
-  });
-  const [activeProfile, setActiveProfile] = useState(profiles[0] || "");
-  const [data, setData] = useState({ expenses: [], limits: { daily:0, weekly:0 }, impulseLockMinutes:15 });
-  const [form, setForm] = useState({ amount:"", mode:"UPI", merchant:"", category:"Misc", note:"" });
-  const [monthFilter, setMonthFilter] = useState("all");
+  const [profiles, setProfiles] = useState(()=> { try{ return JSON.parse(localStorage.getItem(storageProfilesKey) || "[]") }catch(e){ return [] } });
+  const [active, setActive] = useState(profiles[0] || "");
+  const [data, setData] = useState({ expenses: [], settings:{} });
+  const [form, setForm] = useState({ amount:"", mode:"UPI", merchant:"", category:"Groceries", note:"" });
+  const [month, setMonth] = useState("all");
+  const [year, setYear] = useState("all");
+  const [lastAddedId, setLastAddedId] = useState(null);
+  const [showToast, setShowToast] = useState(false);
+  const [sortOrder, setSortOrder] = useState("newest");
+  const merchantRef = useRef(null);
 
-  // Load profile data when activeProfile changes
+  // Load profile data
   useEffect(()=>{
-    if(!activeProfile) return;
-    const key = storageKeyForProfile(activeProfile);
-    try {
-      const raw = localStorage.getItem(key);
-      if(raw){
-        setData(JSON.parse(raw));
-      } else {
-        setData({ expenses: [], limits:{daily:0,weekly:0}, impulseLockMinutes:15 });
-      }
-    } catch(e){
-      setData({ expenses: [], limits:{daily:0,weekly:0}, impulseLockMinutes:15 });
-    }
-  }, [activeProfile]);
+    if(!active) return;
+    const raw = localStorage.getItem(storageKey(active));
+    if(raw) setData(JSON.parse(raw)); else setData({ expenses: [], settings:{} });
+  }, [active]);
 
-  // Save data whenever it changes (and profile exists)
-  useEffect(()=>{
-    if(!activeProfile) return;
-    const key = storageKeyForProfile(activeProfile);
-    localStorage.setItem(key, JSON.stringify(data));
-  }, [data, activeProfile]);
+  // Persist profiles list
+  useEffect(()=>{ localStorage.setItem(storageProfilesKey, JSON.stringify(profiles)) }, [profiles]);
 
-  // Profiles list persistence
-  useEffect(()=>{
-    localStorage.setItem("baremin_profiles", JSON.stringify(profiles));
-  }, [profiles]);
+  // Persist profile data
+  useEffect(()=>{ if(!active) return; localStorage.setItem(storageKey(active), JSON.stringify(data)) }, [data, active]);
 
+  // Create profile
   function createProfile(name){
     if(!name) return alert("Enter a profile name");
-    if(profiles.includes(name)) { setActiveProfile(name); return; }
+    if(profiles.includes(name)){ setActive(name); return; }
     const next = [...profiles, name];
-    setProfiles(next);
-    setActiveProfile(name);
-    // initialize empty data in storage
-    localStorage.setItem(storageKeyForProfile(name), JSON.stringify({ expenses: [], limits:{daily:0,weekly:0}, impulseLockMinutes:15 }));
+    setProfiles(next); setActive(name);
+    localStorage.setItem(storageKey(name), JSON.stringify({ expenses: [], settings:{} }));
   }
-
   function deleteProfile(name){
-    if(!confirm(`Delete profile ${name} and all its local data? This cannot be undone.`)) return;
-    const next = profiles.filter(p=>p!==name);
-    setProfiles(next);
-    localStorage.removeItem(storageKeyForProfile(name));
-    if(activeProfile===name){ setActiveProfile(next[0] || ""); setData({ expenses: [], limits:{daily:0,weekly:0}, impulseLockMinutes:15 }); }
+    if(!confirm(`Delete profile ${name} and all data?`)) return;
+    setProfiles(prev=> prev.filter(p=>p!==name));
+    localStorage.removeItem(storageKey(name));
+    if(active===name){ setActive(""); setData({ expenses: [], settings:{} }); }
   }
 
-  function addExpense(e){
-    e && e.preventDefault();
+  // Add expense
+  function addExpense(ev){
+    ev && ev.preventDefault();
     const amt = parseFloat(form.amount);
-    if(!amt || amt<=0) return alert("Enter a valid amount");
+    if(!amt || amt<=0) return alert("Enter valid amount");
     const now = new Date();
-    const isQuick = QUICK_COMMERCE_KEYWORDS.some(k=> form.merchant.toLowerCase().includes(k));
-    const item = {
-      id: uid(),
-      amount: amt,
-      mode: form.mode,
-      merchant: form.merchant || "Unknown",
-      category: form.category || "Misc",
-      note: form.note || "",
-      timestamp: now.toISOString(),
-      quick: !!isQuick
-    };
-    setData(prev=>({ ...prev, expenses: [item, ...prev.expenses] }));
+    const quick = QUICK_COMMERCE_KEYWORDS.some(k=> (form.merchant||"").toLowerCase().includes(k));
+    const item = { id: uid(), amount: amt, mode: form.mode, merchant: form.merchant||"Unknown", category: form.category||"Misc", note: form.note||"", timestamp: now.toISOString(), quick };
+    setData(prev=> ({ ...prev, expenses: [item, ...prev.expenses] }));
+    setLastAddedId(item.id);
+    setShowToast(true);
+    setTimeout(()=>setShowToast(false), 4000);
+    // reset form but keep mode & category for speed
     setForm({ amount:"", mode: form.mode, merchant:"", category: form.category, note:"" });
   }
 
-  function deleteExpense(id){
-    if(!confirm("Delete this expense?")) return;
-    setData(prev=>({ ...prev, expenses: prev.expenses.filter(x=>x.id!==id) }));
+  function undoLast(){
+    if(!lastAddedId) return;
+    setData(prev=> ({ ...prev, expenses: prev.expenses.filter(x=> x.id !== lastAddedId) }));
+    setLastAddedId(null);
+    setShowToast(false);
   }
 
-  function markAsCash(id){
-    setData(prev=>({ ...prev, expenses: prev.expenses.map(x=> x.id===id ? {...x, mode:"Cash"} : x) }));
-  }
+  function deleteExpense(id){ if(!confirm("Delete expense?")) return setData(prev=> ({ ...prev, expenses: prev.expenses.filter(x=>x.id!==id) })); }
+  function markAsCash(id){ setData(prev=> ({ ...prev, expenses: prev.expenses.map(x=> x.id===id ? {...x, mode:"Cash"} : x) })); }
 
-  // Computations
-  const today = new Date();
-  const todayISOstart = startOfDayISO(today);
-  const sameDay = (iso, dayStartISO) => new Date(iso) >= new Date(dayStartISO) && new Date(iso) < new Date(new Date(dayStartISO).getTime() + 24*60*60*1000);
+  // Derived lists and filters
+  const expenses = data.expenses.slice().sort((a,b)=> sortOrder==="newest" ? new Date(b.timestamp)-new Date(a.timestamp) : new Date(a.timestamp)-new Date(b.timestamp));
 
-  const expensesFilteredByMonth = (()=>{
-    if(monthFilter==="all") return data.expenses;
-    const sel = parseInt(monthFilter,10);
-    return data.expenses.filter(x => new Date(x.timestamp).getMonth() === sel);
-  })();
+  // unique years from expenses
+  const years = Array.from(new Set(data.expenses.map(e=> new Date(e.timestamp).getFullYear()))).sort((a,b)=>b-a);
+  if(!years.includes(new Date().getFullYear())) years.unshift(new Date().getFullYear());
+  const yearOptions = ["all", ...years.map(String)];
 
-  const dailyExpenses = data.expenses.filter(x => sameDay(x.timestamp, todayISOstart));
-  const dailyUPI = dailyExpenses.filter(x=> x.mode==="UPI").reduce((s,x)=> s + x.amount, 0);
+  const filtered = expenses.filter(e=>{
+    if(month!=="all"){
+      if(new Date(e.timestamp).getMonth() !== parseInt(month,10)) return false;
+    }
+    if(year!=="all"){
+      if(new Date(e.timestamp).getFullYear() !== parseInt(year,10)) return false;
+    }
+    return true;
+  });
 
-  const monthIndex = monthFilter==="all" ? null : parseInt(monthFilter,10);
-  const monthlyExpenses = monthIndex===null ? data.expenses : data.expenses.filter(x => new Date(x.timestamp).getMonth()===monthIndex);
-  const monthlyTotal = monthlyExpenses.reduce((s,x)=> s + x.amount, 0);
+  // group by date for display
+  const grouped = {};
+  filtered.forEach(e=>{ const d = formatDateOnly(e.timestamp); if(!grouped[d]) grouped[d]=[]; grouped[d].push(e); });
+
+  // totals
+  const todayISOstart = new Date(); todayISOstart.setHours(0,0,0,0);
+  const dailyExpenses = data.expenses.filter(e=> new Date(e.timestamp) >= todayISOstart);
+  const dailyUPI = dailyExpenses.filter(e=> e.mode==="UPI").reduce((s,x)=> s + x.amount, 0);
   const dailyTotal = dailyExpenses.reduce((s,x)=> s + x.amount, 0);
+  const monthlyTotal = filtered.reduce((s,x)=> s + x.amount, 0);
 
-  // UI small helpers
-  const monthOptions = [{label:"All months", val:"all"}].concat(Array.from({length:12}).map((_,i)=>({label: new Date(2020, i, 1).toLocaleString(undefined, {month: 'long'}), val: String(i)})));
+  // category totals (for filtered view)
+  const categoryTotals = {};
+  filtered.forEach(e=> { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount; });
+  const categoryList = Object.keys(categoryTotals).map(k=> ({k, v: categoryTotals[k]})).sort((a,b)=> b.v - a.v);
 
+  // label for summary like "Nov 2025 Exp"
+  const monthLabel = month==="all" ? (year==="all" ? "All time" : `${year}`) : `${new Date(2020, parseInt(month,10), 1).toLocaleString(undefined,{month:'short'})} ${ year==="all" ? "" : year }`.trim();
 
   return (
     <div className="container">
       <div className="header">
-        <div>
-          <h2 style={{margin:0}}>BareMinimum • v2</h2>
-          <div className="small">Live minimal • track UPI & cash • local-only profiles</div>
+        <div className="header-title">
+          <h2 style={{margin:0}}>BareMinimum • v3</h2>
+          <div className="small">Local profiles • grouped dates • category view • multi-device when you add cloud</div>
         </div>
 
-        <div className="row">
-          <label className="small">Profile:</label>
-          <select className="input profile-select" value={activeProfile} onChange={e=>setActiveProfile(e.target.value)}>
-            <option value="">-- choose profile --</option>
+        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          <label className="small">Profile</label>
+          <select className="input" value={active} onChange={e=>setActive(e.target.value)}>
+            <option value="">-- choose --</option>
             {profiles.map(p=> <option key={p} value={p}>{p}</option>)}
           </select>
-          <button className="input" onClick={()=>{
-            const name = prompt("Create profile name (e.g. Somanshu / Guest):");
-            if(name) createProfile(name.trim());
-          }}>New</button>
-          {activeProfile && <button className="input" onClick={()=>deleteProfile(activeProfile)}>Delete</button>}
+          <button className="input" onClick={()=>{ const n = prompt("Profile name:"); if(n) createProfile(n.trim()); }}>New</button>
+          {active && <button className="input" onClick={()=>deleteProfile(active)}>Delete</button>}
         </div>
       </div>
 
-      {!activeProfile ? (
+      {!active ? (
         <div className="card">
-          <div style={{marginBottom:8}}>No profile selected. Create a simple local profile to separate data for different users (no passwords).</div>
-          <div className="row">
-            <input className="input" placeholder="Quick profile name" id="profileName" />
-            <button className="button" onClick={()=>{
-              const el = document.getElementById("profileName");
-              if(el && el.value) createProfile(el.value.trim());
-            }}>Create profile</button>
+          <div style={{marginBottom:8}}>Create or select a profile to start. Profiles are stored locally. For cross-device sync we'll add cloud in v4.</div>
+          <div style={{display:'flex', gap:8}}>
+            <input className="input" id="quickname" placeholder="Profile name" />
+            <button className="button" onClick={()=>{ const el = document.getElementById("quickname"); if(el && el.value) createProfile(el.value.trim()); }}>Create</button>
           </div>
-          <div className="footer-small">Profiles are stored locally in your browser only. To share your app across devices you'd need a cloud backup (optional).</div>
         </div>
       ) : (
         <>
-          <div style={{display:'grid', gridTemplateColumns:'1fr 320px', gap:12}}>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 340px', gap:12}}>
             <div className="card">
               <h3 style={{marginTop:0}}>Add expense</h3>
               <form onSubmit={addExpense} style={{display:'grid', gap:8}}>
                 <div style={{display:'flex', gap:8}}>
                   <input className="input" placeholder="Amount (₹)" value={form.amount} onChange={e=>setForm({...form, amount:e.target.value})} autoFocus />
                   <select className="input" value={form.mode} onChange={e=>setForm({...form, mode:e.target.value})}>
-                    <option>UPI</option>
-                    <option>Card</option>
-                    <option>Cash</option>
-                    <option>Netbanking</option>
+                    <option>UPI</option><option>Card</option><option>Cash</option><option>Netbanking</option>
                   </select>
                 </div>
-                <input className="input" placeholder="Merchant (blinkit / store name)" value={form.merchant} onChange={e=>setForm({...form, merchant:e.target.value})} />
-                <input className="input" placeholder="Category (e.g. Food, Travel)" value={form.category} onChange={e=>setForm({...form, category:e.target.value})} />
-                <input className="input" placeholder="Note (why did I buy?)" value={form.note} onChange={e=>setForm({...form, note:e.target.value})} />
+
                 <div style={{display:'flex', gap:8}}>
-                  <button className="button" type="submit">Add expense</button>
-                  <button className="input" type="button" onClick={()=>{
-                    if(confirm("Start a 30 minute cooling-off (this is only a nudge, you can still add expenses)?")){
-                      alert("Cooling-off noted — use it to pause and rethink impulse buys.");
-                    }
-                  }}>Start 30m cooling</button>
+                  <input className="input" placeholder="Merchant (e.g. blinkit)" list="merchants" value={form.merchant} onChange={e=>setForm({...form, merchant:e.target.value})} ref={merchantRef} />
+                </div>
+
+                <datalist id="merchants">
+                  {Array.from(new Set(data.expenses.map(e=>e.merchant))).filter(Boolean).map(m=> <option key={m} value={m} />)}
+                </datalist>
+
+                <div style={{display:'flex', gap:8}}>
+                  <select className="input" value={form.category} onChange={e=>setForm({...form, category:e.target.value})}>
+                    {SUGGESTED_TAGS.map(t=> <option key={t.key} value={t.key}>{t.emoji} {t.key}</option>)}
+                  </select>
+                  <input className="input" placeholder="Note (short)" value={form.note} onChange={e=>setForm({...form, note:e.target.value})} />
+                </div>
+
+                <div style={{display:'flex', gap:8}}>
+                  <button className="button" type="submit">Add</button>
+                  <button className="input" type="button" onClick={()=>{ setForm({ amount:"", mode: form.mode, merchant:"", category: form.category, note:"" }); }}>Clear</button>
                 </div>
               </form>
 
-              <div style={{marginTop:12}}>
-                <div className="small">Tip: Prefer cash for small daily purchases. Use "Mark as cash" on an item if you paid cash later.</div>
-              </div>
+              <div style={{marginTop:12}} className="small">Tip: Use Enter to save. Recent merchants are suggested as you type.</div>
             </div>
 
             <div className="card">
-              <h4 style={{marginTop:0}}>Quick summary</h4>
-              <div className="small">Profile: <strong>{activeProfile}</strong></div>
-              <div style={{marginTop:8}}>Today total: <strong>₹{dailyTotal.toFixed(2)}</strong></div>
-              <div style={{marginTop:6}}>This month total: <strong>₹{monthlyTotal.toFixed(2)}</strong></div>
-              <div style={{marginTop:6}}>UPI today: <strong>{dailyUPI.toFixed(2)}</strong> {dailyUPI>400 && <span className="alert"> • Alert: UPI > ₹400 today</span>}</div>
-              <div style={{marginTop:8}}><label className="small">Filter month:</label>
-                <select className="input" value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
-                  {monthOptions.map(m=> <option key={m.val} value={m.val}>{m.label}</option>)}
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                <div>
+                  <div className="summary-title">Quick summary</div>
+                  <div style={{fontWeight:700}}>{monthLabel} Expenses • {currency.format(monthlyTotal)}</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div className="small">Today: <strong>{currency.format(dailyTotal)}</strong></div>
+                  <div style={{marginTop:6}}>UPI today: <strong>{currency.format(dailyUPI)}</strong> {dailyUPI>400 && <div className="alert">Limit exceeded</div>}</div>
+                </div>
+              </div>
+
+              <div style={{marginTop:10}}>
+                <label className="small">Filter month</label>
+                <select className="input" value={month} onChange={e=>setMonth(e.target.value)}>
+                  <option value="all">All</option>
+                  {Array.from({length:12}).map((_,i)=> <option key={i} value={String(i)}>{new Date(2020,i,1).toLocaleString(undefined,{month:'long'})}</option>)}
+                </select>
+                <label className="small" style={{marginTop:8}}>Filter year</label>
+                <select className="input" value={year} onChange={e=>setYear(e.target.value)}>
+                  {yearOptions.map(y=> <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+
+              <div style={{marginTop:12}}>
+                <div className="small">Sort</div>
+                <select className="input" value={sortOrder} onChange={e=>setSortOrder(e.target.value)}>
+                  <option value="newest">Newest</option><option value="oldest">Oldest</option>
                 </select>
               </div>
             </div>
@@ -215,54 +222,65 @@ export default function App(){
           <div style={{display:'flex', gap:12, marginTop:12}}>
             <div style={{flex:1}} className="card">
               <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                <h3 style={{margin:0}}>Expenses ({expensesFilteredByMonth.length})</h3>
-                <div className="small">Showing: {monthFilter==="all" ? "All months" : monthOptions.find(m=>m.val===monthFilter)?.label}</div>
-              </div>
-
-              <div style={{marginTop:8}}>
-                <div className="row" style={{gap:6}}>
-                  <button className="input" onClick={()=>{ setData(prev=>({ ...prev, expenses: prev.expenses.slice().sort((a,b)=> new Date(b.timestamp)-new Date(a.timestamp)) })) }}>Sort newest</button>
-                  <button className="input" onClick={()=>{ setData(prev=>({ ...prev, expenses: prev.expenses.slice().sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp)) })) }}>Sort oldest</button>
-                </div>
+                <h3 style={{margin:0}}>Expenses ({filtered.length})</h3>
+                <div className="small">Grouped by date</div>
               </div>
 
               <div className="exp-list">
-                {expensesFilteredByMonth.length===0 && <div className="small" style={{padding:12}}>No expenses yet for this month.</div>}
-                {expensesFilteredByMonth.map(e=> (
-                  <div className="exp-item" key={e.id}>
-                    <div>
-                      <div style={{fontWeight:700}}>₹{e.amount.toFixed(2)} <span className="small" style={{marginLeft:8}}>· {e.merchant}</span></div>
-                      <div className="small">{e.category} · {formatDateTime(e.timestamp)}</div>
-                      {e.note && <div style={{marginTop:6}} className="small">{e.note}</div>}
-                      {e.quick && <div style={{marginTop:6}} className="tag">Quick-commerce flagged</div>}
-                    </div>
-                    <div style={{display:'flex', flexDirection:'column', gap:6, alignItems:'flex-end'}}>
-                      <button className="input" onClick={()=>markAsCash(e.id)}>Mark as cash</button>
-                      <button className="input" onClick={()=>deleteExpense(e.id)}>Delete</button>
-                    </div>
+                {Object.keys(grouped).length===0 && <div className="small" style={{padding:12}}>No expenses for selected filters.</div>}
+                {Object.keys(grouped).map(dateStr=> (
+                  <div key={dateStr}>
+                    <div className="date-group">{dateStr}</div>
+                    {grouped[dateStr].map(e=> (
+                      <div className="exp-item" key={e.id}>
+                        <div>
+                          <div style={{fontWeight:700}}>{currency.format(e.amount)} <span className="small">· {e.merchant}</span></div>
+                          <div className="small">{e.category} · {formatDateTime(e.timestamp)}</div>
+                          {e.note && <div style={{marginTop:6}} className="small">{e.note}</div>}
+                          {e.quick && <div className="tag">Quick-commerce flagged</div>}
+                        </div>
+                        <div style={{display:'flex', flexDirection:'column', gap:6, alignItems:'flex-end'}}>
+                          <button className="input" onClick={()=>markAsCash(e.id)}>Mark as cash</button>
+                          <button className="input" onClick={()=>deleteExpense(e.id)}>Delete</button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
             </div>
 
-            <div style={{width:320}} className="card">
-              <h4 style={{marginTop:0}}>Insights</h4>
-              <div style={{marginBottom:8}}>Monthly total: <strong>₹{monthlyTotal.toFixed(2)}</strong></div>
-              <div style={{marginBottom:8}}>Daily total: <strong>₹{dailyTotal.toFixed(2)}</strong></div>
-              <div style={{marginBottom:8}}>UPI today: <strong>₹{dailyUPI.toFixed(2)}</strong> {dailyUPI>400 ? <div className="alert">Limit exceeded</div> : <div className="small">Under ₹400</div>}</div>
+            <div style={{width:340}} className="card">
+              <h4 style={{marginTop:0}}>By category</h4>
+              <div>
+                {categoryList.length===0 && <div className="small">No categories yet.</div>}
+                {categoryList.map(c=> (
+                  <div className="category-row" key={c.k}>
+                    <div><span className="emoji">{(SUGGESTED_TAGS.find(t=>t.key===c.k)||{emoji:"🔖"}).emoji}</span> {c.k}</div>
+                    <div style={{fontWeight:700}}>{currency.format(c.v)}</div>
+                  </div>
+                ))}
+              </div>
+
               <hr />
-              <h5 style={{marginBottom:6}}>Small rituals</h5>
+              <h5 style={{marginTop:8}}>Rituals</h5>
               <ol className="small">
-                <li>Set a daily small cash allowance and record withdrawals.</li>
-                <li>Before UPI, pause for 15 minutes and consider cash if needed.</li>
-                <li>Flag quick-commerce merchants and review spend weekly.</li>
+                <li>Withdraw a small daily cash allowance and record withdrawals.</li>
+                <li>Pause 15 minutes before UPI purchases.</li>
+                <li>Review category totals weekly.</li>
               </ol>
-              <div className="footer-small">Data is local to this device and profile only.</div>
             </div>
           </div>
         </>
       )}
 
+      {showToast && lastAddedId && (
+        <div className="toast">
+          Expense added ✓ <button className="input" onClick={undoLast} style={{marginLeft:8}}>Undo</button>
+        </div>
+      )}
+
+      <div className="fab" onClick={()=>{ const el = document.querySelector('input[placeholder=\"Amount (₹)\"]'); if(el){ el.focus(); window.scrollTo({top:0, behavior:'smooth'}); } }}>+ Add</div>
     </div>
   );
 }
