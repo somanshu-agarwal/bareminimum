@@ -1,1 +1,0 @@
-BareMinimum v6.2 Google-only build. Add .env with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then npm install && npm run build. Configure Supabase auth redirect to your Vercel URL.
