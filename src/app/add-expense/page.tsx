@@ -1,9 +1,10 @@
 // app/add-expense/page.tsx
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
 
 const CATEGORIES = [
   '🥦 Groceries', '🍔 Food Delivery', '🚗 Transportation', 
@@ -17,6 +18,7 @@ const PAYMENT_METHODS = ['UPI', 'Cash', 'Netbanking', 'Card'] as const
 export default function AddExpense() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
+  const [authLoading, setAuthLoading] = useState(true)
   const [form, setForm] = useState({
     amount: '',
     category: '',
@@ -25,6 +27,25 @@ export default function AddExpense() {
     description: ''
   })
 
+  // Check authentication on component mount
+  useEffect(() => {
+    checkAuth()
+  }, [])
+
+  const checkAuth = async () => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      window.location.href = '/login'  // Use window.location for immediate redirect
+      return
+    }
+  } catch (error) {
+    console.error('Auth error:', error)
+    window.location.href = '/login'
+  } finally {
+    setAuthLoading(false)
+  }
+}
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.amount || !form.category) return
@@ -32,8 +53,11 @@ export default function AddExpense() {
     setLoading(true)
     
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('Not authenticated')
+      const user = await getCurrentUser()
+      if (!user) {
+        router.push('/login')
+        return
+      }
 
       const { error } = await supabase
         .from('transactions')
@@ -48,9 +72,13 @@ export default function AddExpense() {
         }])
 
       if (error) throw error
+      
+      // Success - redirect to dashboard
       router.push('/')
+      router.refresh() // Refresh to show new data
     } catch (error) {
       console.error('Error adding expense:', error)
+      alert('Failed to add expense. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -66,6 +94,15 @@ export default function AddExpense() {
     if (m.includes('zomato') || m.includes('swiggy')) return '🍔 Food Delivery'
     if (m.includes('uber') || m.includes('ola')) return '🚗 Transportation'
     return ''
+  }
+
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="max-w-md mx-auto bg-white p-6 rounded-lg border text-center">
+        <p>Checking authentication...</p>
+      </div>
+    )
   }
 
   return (
@@ -97,8 +134,8 @@ export default function AddExpense() {
                 key={cat}
                 type="button"
                 onClick={() => updateForm({ category: cat })}
-                className={`p-3 border rounded-lg text-sm ${
-                  form.category === cat ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                className={`p-3 border rounded-lg text-sm transition-colors ${
+                  form.category === cat ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
                 {cat}
@@ -116,8 +153,8 @@ export default function AddExpense() {
                 key={method}
                 type="button"
                 onClick={() => updateForm({ paymentMethod: method })}
-                className={`p-3 border rounded-lg ${
-                  form.paymentMethod === method ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                className={`p-3 border rounded-lg transition-colors ${
+                  form.paymentMethod === method ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
                 {method}
@@ -159,7 +196,7 @@ export default function AddExpense() {
           <button
             type="button"
             onClick={() => router.push('/')}
-            className="flex-1 py-3 px-4 border rounded-lg font-semibold text-gray-700 hover:bg-gray-50"
+            className="flex-1 py-3 px-4 border rounded-lg font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
             disabled={loading}
           >
             Cancel
@@ -167,7 +204,7 @@ export default function AddExpense() {
           <button
             type="submit"
             disabled={loading || !form.amount || !form.category}
-            className="flex-1 py-3 px-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50"
+            className="flex-1 py-3 px-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {loading ? 'Adding...' : 'Add Expense'}
           </button>

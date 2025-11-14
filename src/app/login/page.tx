@@ -1,0 +1,87 @@
+// app/login/page.tsx
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+
+export default function Login() {
+  const router = useRouter()
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setupAuth()
+  }, [])
+
+  const setupAuth = async () => {
+    try {
+      // Check if user already exists
+      const { data: { user } } = await supabase.auth.getUser()
+      
+      if (user) {
+        router.push('/')
+        return
+      }
+
+      // For development: Auto-signin with test credentials
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: 'test@bareminimum.com',
+        password: 'test123'
+      })
+
+      if (error) {
+        // If test user doesn't exist, create one
+        await createTestUser()
+      } else {
+        router.push('/')
+      }
+    } catch (error) {
+      console.error('Auth setup failed:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const createTestUser = async () => {
+    const { data, error } = await supabase.auth.signUp({
+      email: 'test@bareminimum.com',
+      password: 'test123'
+    })
+
+    if (error) {
+      console.error('Failed to create test user:', error)
+    } else if (data.user) {
+      router.push('/')
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="max-w-md w-full bg-white p-8 rounded-lg border text-center">
+          <h1 className="text-2xl font-bold mb-4">BareMinimum</h1>
+          <p>Setting up your account...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="max-w-md w-full bg-white p-8 rounded-lg border">
+        <h1 className="text-2xl font-bold mb-6 text-center">Welcome to BareMinimum</h1>
+        <div className="space-y-4">
+          <button
+            onClick={setupAuth}
+            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+          >
+            Continue with Test Account
+          </button>
+          <p className="text-sm text-gray-500 text-center">
+            Using test credentials for development
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
