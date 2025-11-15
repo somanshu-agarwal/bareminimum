@@ -1,14 +1,18 @@
 // src/app/page.tsx
+
+import { getCurrentUserIdSafe } from '@/lib/auth'
 import { expenseService } from '@/lib/supabase/client'
 import { investmentService } from '@/lib/supabase/investments'
 
 async function getDashboardData() {
-  const testUserId = 'test-user-123'
+  //const testUserId = 'test-user-123'
+  // 🚀 CHANGED: Use dual-mode auth helper
+  const userId = await getCurrentUserIdSafe()
   
   try {
     const [expenses, portfolio] = await Promise.all([
-      expenseService.getByUser(testUserId),
-      investmentService.getPortfolioSummary(testUserId)
+      expenseService.getByUser(userId),
+      investmentService.getPortfolioSummary(userId)
     ])
 
     const currentMonth = new Date().toISOString().slice(0, 7)
