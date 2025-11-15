@@ -1,6 +1,7 @@
 // src/app/add-investment/page.tsx
 'use client'
 
+import { getCurrentUserIdSafe } from '@/lib/auth'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
@@ -33,49 +34,50 @@ export default function AddInvestment() {
     notes: ''
   })
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    if (!form.type || !form.amount || !form.current_value) {
-      toast.error('Please fill in required fields')
-      return
-    }
-
-    setLoading(true)
-    const toastId = toast.loading('Adding investment...')
-
-    try {
-      const testUserId = 'test-user-123'
-      
-      const { data, error } = await supabase
-        .from('investments')
-        .insert([{
-          user_id: testUserId,
-          type: form.type,
-          name: form.name || `${form.type} Investment`,
-          amount: parseFloat(form.amount),
-          current_value: parseFloat(form.current_value),
-          expected_return: parseFloat(form.expected_return),
-          date: form.date,
-          notes: form.notes || null
-        }])
-        .select()
-
-      if (error) throw error
-
-      toast.success('Investment added successfully!', { id: toastId })
-      
-      setTimeout(() => {
-        router.push('/investments')
-      }, 1000)
-
-    } catch (error: any) {
-      console.error('Error adding investment:', error)
-      toast.error(`Failed to add investment: ${error.message}`, { id: toastId })
-    } finally {
-      setLoading(false)
-    }
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault()
+  
+  if (!form.type || !form.amount || !form.current_value) {
+    toast.error('Please fill in required fields')
+    return
   }
+
+  setLoading(true)
+  const toastId = toast.loading('Adding investment...')
+
+  try {
+    // 🚀 CHANGED: Use dual-mode auth helper instead of hardcoded ID
+    const userId = await getCurrentUserIdSafe()
+    
+    const { data, error } = await supabase
+      .from('investments')
+      .insert([{
+        user_id: userId, // 🚀 Now uses real user ID or safe fallback
+        type: form.type,
+        name: form.name || `${form.type} Investment`,
+        amount: parseFloat(form.amount),
+        current_value: parseFloat(form.current_value),
+        expected_return: parseFloat(form.expected_return),
+        date: form.date,
+        notes: form.notes || null
+      }])
+      .select()
+
+    if (error) throw error
+
+    toast.success('Investment added successfully!', { id: toastId })
+    
+    setTimeout(() => {
+      router.push('/investments')
+    }, 1000)
+
+  } catch (error: any) {
+    console.error('Error adding investment:', error)
+    toast.error(`Failed to add investment: ${error.message}`, { id: toastId })
+  } finally {
+    setLoading(false)
+  }
+}
 
   const updateForm = (updates: Partial<typeof form>) => {
     setForm(prev => ({ ...prev, ...updates }))
